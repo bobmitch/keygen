@@ -41,10 +41,6 @@ export function renderSummary(el: HTMLElement, a: AnalysisResult) {
       <div class="value">${a.bars.length}</div>
     </div>
     <div class="stat">
-      <div class="label">Sections</div>
-      <div class="value">${a.sections.length}</div>
-    </div>
-    <div class="stat">
       <div class="label">Duration</div>
       <div class="value">${formatDuration(a.duration)}</div>
     </div>

@@ -15,7 +15,7 @@ import { Player } from './ui/player';
 import { Chart } from './ui/chart';
 import { Controls } from './ui/controls';
 import { renderSummary } from './ui/summary';
-import { renderLeadsheet } from './ui/leadsheet';
+import { renderLeadsheet, highlightLeadsheet } from './ui/leadsheet';
 import { exportPng, exportJson } from './ui/exporters';
 
 // ---- DOM ----
@@ -86,6 +86,7 @@ const controls = new Controls(controlsEl, {
 
 player.onUpdate((t, playing) => {
   chart.setPlayhead(t);
+  highlightLeadsheet(leadsheetEl, t);
   controls.setPlaying(playing);
 });
 chart.onSeek((t) => player.seek(t));

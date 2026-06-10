@@ -4,18 +4,13 @@ import type { AnalysisResult, DecodedAudio } from '../types';
 const WAVE_H = 130;
 const CHORD_H = 46;
 const BARS_H = 30;
-const SECTION_H = 34;
 const AXIS_H = 22;
-const TOTAL_H = WAVE_H + CHORD_H + BARS_H + SECTION_H + AXIS_H;
+const TOTAL_H = WAVE_H + CHORD_H + BARS_H + AXIS_H;
 
 const WAVE_TOP = 0;
 const CHORD_TOP = WAVE_H;
 const BARS_TOP = CHORD_H + WAVE_H;
-const SECTION_TOP = BARS_TOP + BARS_H;
-const AXIS_TOP = SECTION_TOP + SECTION_H;
-
-// Section label -> hue palette (distinct, reused per repeated section).
-const SECTION_HUES = [170, 265, 30, 330, 200, 95, 50, 305];
+const AXIS_TOP = BARS_TOP + BARS_H;
 
 export class Chart {
   private scrollEl: HTMLElement;
@@ -136,29 +131,11 @@ export class Chart {
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, cssWidth, TOTAL_H);
 
-    this.drawSectionTint(ctx, cssWidth);
     this.drawWaveform(ctx, cssWidth);
     this.drawChords(ctx);
     this.drawBars(ctx, cssWidth);
-    this.drawSections(ctx);
     this.drawAxis(ctx, cssWidth, duration);
     this.updatePlayhead();
-  }
-
-  private sectionColor(label: string, alpha: number): string {
-    const idx = (label.charCodeAt(0) - 65) % SECTION_HUES.length;
-    const hue = SECTION_HUES[(idx + SECTION_HUES.length) % SECTION_HUES.length];
-    return `hsla(${hue}, 60%, 55%, ${alpha})`;
-  }
-
-  private drawSectionTint(ctx: CanvasRenderingContext2D, _w: number) {
-    if (!this.analysis) return;
-    for (const s of this.analysis.sections) {
-      const x = this.timeToX(s.start);
-      const w = this.timeToX(s.end) - x;
-      ctx.fillStyle = this.sectionColor(s.label, 0.08);
-      ctx.fillRect(x, WAVE_TOP, w, WAVE_H);
-    }
   }
 
   private drawWaveform(ctx: CanvasRenderingContext2D, w: number) {
@@ -254,28 +231,6 @@ export class Chart {
       if ((bar.index - 1) % showEvery === 0) {
         ctx.fillStyle = 'rgba(154,167,180,0.85)';
         ctx.fillText(String(bar.index), x + 3, BARS_TOP + 3);
-      }
-    }
-  }
-
-  private drawSections(ctx: CanvasRenderingContext2D) {
-    if (!this.analysis) return;
-    ctx.font = '12px system-ui';
-    ctx.textBaseline = 'middle';
-    ctx.textAlign = 'left';
-    for (const s of this.analysis.sections) {
-      const x = this.timeToX(s.start);
-      const w = this.timeToX(s.end) - x;
-      ctx.fillStyle = this.sectionColor(s.label, 0.5);
-      ctx.fillRect(x, SECTION_TOP + 3, Math.max(1, w - 2), SECTION_H - 6);
-      ctx.fillStyle = '#0e1116';
-      if (w > 14) {
-        ctx.save();
-        ctx.beginPath();
-        ctx.rect(x, SECTION_TOP, w, SECTION_H);
-        ctx.clip();
-        ctx.fillText(s.label, x + 6, SECTION_TOP + SECTION_H / 2);
-        ctx.restore();
       }
     }
   }

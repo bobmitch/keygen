@@ -10,7 +10,8 @@ Nothing is uploaded — the file is decoded and analyzed entirely on your device
 - **Key + mode** detection (Essentia `KeyExtractor`).
 - **Tempo + beat grid** (Essentia `RhythmExtractor2013`) with a `realtime-bpm-analyzer`
   cross-check and ½× / 2× correction for octave errors.
-- **Chord chart** — beat-synchronous major/minor triad estimation via chroma (HPCP) template matching.
+- **Chord chart** — beat-synchronous major/minor triad estimation (Essentia `ChordsDetectionBeats`
+  on HPCP chroma) with **Viterbi smoothing** to suppress isolated, low-confidence flips.
 - **Bars & sections** — beats grouped into bars (adjustable meter + downbeat), and structural
   sections from a chroma self-similarity / novelty curve.
 - **Waveform + aligned chart lanes** rendered on one canvas (pixel-perfect alignment), plus
@@ -54,7 +55,8 @@ The Vite `base` is set to `/keygen/` for production so assets resolve under the 
 
 1. The file is decoded with the Web Audio API and downmixed to mono at 44.1 kHz (`src/audio/decode.ts`).
 2. Heavy analysis runs in a **Web Worker** (`src/worker/analysis.worker.ts`) using Essentia.js
-   (WASM): tempo + beats, key, per-frame chroma, and chord templating.
+   (WASM): tempo + beats, key, per-frame chroma, and beat-synchronous chord detection
+   (`ChordsDetectionBeats`) followed by a Viterbi smoothing pass.
 3. The main thread groups beats into bars and detects sections (`src/analysis/structure.ts`),
    then renders the waveform and aligned chart lanes on a single canvas (`src/ui/chart.ts`).
 

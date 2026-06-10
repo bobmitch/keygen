@@ -72,9 +72,9 @@ async function analyze(samples: Float32Array, sampleRate: number): Promise<Worke
   post({ type: 'progress', stage: 'Computing chroma features' });
   const { chroma, chromaTimes } = computeChroma(es, samples, sampleRate);
 
-  // --- Chords (template match on beat-synchronous chroma) ---
+  // --- Chords (Essentia beat-synchronous detection + Viterbi smoothing) ---
   post({ type: 'progress', stage: 'Estimating chords' });
-  const chords = estimateChords(beats, chroma, chromaTimes, samples.length / sampleRate);
+  const chords = estimateChords(es, beats, chroma, samples.length / sampleRate, sampleRate);
 
   return {
     key,
@@ -119,93 +119,175 @@ function computeChroma(es: any, samples: Float32Array, sampleRate: number) {
   return { chroma, chromaTimes };
 }
 
-/** 24 binary triad templates (12 major + 12 minor) in HPCP (A-first) index space. */
-function buildChordTemplates(): { label: string; vec: number[] }[] {
-  const templates: { label: string; vec: number[] }[] = [];
+// Chord state space for smoothing: 24 major/minor triads + a "no-chord" state.
+// Labels use the same A-first sharp spelling Essentia's ChordsDetection emits.
+function buildChordLabels(): string[] {
+  const labels: string[] = [];
   for (let root = 0; root < 12; root++) {
-    const major = new Array(12).fill(0);
-    major[root] = major[(root + 4) % 12] = major[(root + 7) % 12] = 1;
-    templates.push({ label: NOTE_NAMES[root], vec: major });
-
-    const minor = new Array(12).fill(0);
-    minor[root] = minor[(root + 3) % 12] = minor[(root + 7) % 12] = 1;
-    templates.push({ label: NOTE_NAMES[root] + 'm', vec: minor });
+    labels.push(NOTE_NAMES[root]);
+    labels.push(NOTE_NAMES[root] + 'm');
   }
-  return templates;
+  return labels;
 }
+const CHORD_LABELS = buildChordLabels();
+const LABEL_TO_INDEX = new Map(CHORD_LABELS.map((label, i) => [label, i] as const));
+const NO_CHORD_INDEX = CHORD_LABELS.length; // 24
+const NUM_STATES = CHORD_LABELS.length + 1; // 25
 
-const CHORD_TEMPLATES = buildChordTemplates();
+// Viterbi hyper-parameters.
+const STAY_PROB = 0.9; // probability a chord persists into the next beat segment
+const NO_CHORD_PRIOR = 0.05; // share of leftover mass assigned to "no chord"
+const LOG_EPS = Math.log(1e-6);
 
 function estimateChords(
+  es: any,
   beats: number[],
   chroma: number[][],
-  chromaTimes: number[],
   duration: number,
+  sampleRate: number,
 ): ChordSpan[] {
-  // Build the segment boundaries from beats; fall back to a fixed grid if no beats.
-  let bounds: number[];
+  // ChordsDetectionBeats estimates one chord per inter-beat segment, so we need
+  // at least two ticks. Fall back to a fixed 0.5 s grid when beats are missing.
+  let ticks: number[];
   if (beats.length >= 2) {
-    bounds = [0, ...beats, duration];
+    ticks = beats;
   } else {
-    bounds = [];
-    for (let t = 0; t <= duration; t += 0.5) bounds.push(t);
+    ticks = [];
+    for (let t = 0; t <= duration; t += 0.5) ticks.push(t);
   }
-  // De-dup / sort.
-  bounds = Array.from(new Set(bounds)).sort((a, b) => a - b);
+  if (ticks.length < 2 || chroma.length === 0) return [];
 
+  const { labels, strengths } = detectChordsBeats(es, chroma, ticks, sampleRate);
+  if (labels.length === 0) return [];
+
+  const path = viterbiSmooth(labels, strengths);
+
+  // Segment k spans [ticks[k], ticks[k + 1]] (Essentia output length is ticks - 1).
   const raw: ChordSpan[] = [];
-  for (let i = 0; i < bounds.length - 1; i++) {
-    const start = bounds[i];
-    const end = bounds[i + 1];
+  const segments = Math.min(path.length, ticks.length - 1);
+  for (let k = 0; k < segments; k++) {
+    const start = ticks[k];
+    const end = ticks[k + 1];
     if (end - start < 0.05) continue;
-    const avg = averageChroma(chroma, chromaTimes, start, end);
-    const match = matchChord(avg);
-    raw.push({ start, end, label: match.label, confidence: match.confidence });
+    const label = path[k] === NO_CHORD_INDEX ? 'N' : CHORD_LABELS[path[k]];
+    raw.push({ start, end, label, confidence: clamp01(strengths[k]) });
   }
 
-  return mergeChords(raw);
+  const merged = mergeChords(raw);
+  // Stretch the first/last span so the lane covers the whole track (pre-roll /
+  // tail that fell outside the beat grid).
+  if (merged.length) {
+    merged[0].start = Math.min(merged[0].start, 0);
+    merged[merged.length - 1].end = Math.max(merged[merged.length - 1].end, duration);
+  }
+  return merged;
 }
 
-function averageChroma(
+/** Run Essentia's ChordsDetectionBeats over the per-frame chroma + beat grid. */
+function detectChordsBeats(
+  es: any,
   chroma: number[][],
-  times: number[],
-  start: number,
-  end: number,
-): number[] {
-  const sum = new Array(12).fill(0);
-  let n = 0;
+  ticks: number[],
+  sampleRate: number,
+): { labels: string[]; strengths: number[] } {
+  const pcp = new es.module.VectorVectorFloat();
   for (let i = 0; i < chroma.length; i++) {
-    if (times[i] >= start && times[i] < end) {
-      for (let p = 0; p < 12; p++) sum[p] += chroma[i][p];
-      n++;
-    }
+    const v = new es.module.VectorFloat();
+    const frame = chroma[i];
+    for (let p = 0; p < 12; p++) v.push_back(frame[p]);
+    pcp.push_back(v); // push_back copies into the C++ container
+    safeDelete(v);
   }
-  if (n === 0) return sum;
-  for (let p = 0; p < 12; p++) sum[p] /= n;
-  return sum;
+  const tickVec = new es.module.VectorFloat();
+  for (const t of ticks) tickVec.push_back(t);
+
+  const res = es.ChordsDetectionBeats(pcp, tickVec, 'interbeat_median', HOP_SIZE, sampleRate);
+
+  const labels: string[] = [];
+  const strengths: number[] = [];
+  const n = res.chords.size();
+  for (let i = 0; i < n; i++) {
+    labels.push(res.chords.get(i));
+    strengths.push(res.strength.get(i));
+  }
+
+  safeDelete(pcp);
+  safeDelete(tickVec);
+  safeDelete(res.chords);
+  safeDelete(res.strength);
+  return { labels, strengths };
 }
 
-function matchChord(chroma: number[]): { label: string; confidence: number } {
-  const norm = l2norm(chroma);
-  if (norm < 1e-6) return { label: 'N', confidence: 0 };
+/**
+ * Viterbi smoothing over the per-segment chord estimates. Emission mass is
+ * concentrated on the detected triad (scaled by its strength) but spread enough
+ * that a self-transition bias can override isolated, low-confidence flips while
+ * still allowing genuine, strong chord changes through. Essentia signals
+ * "no confident chord" with a negative strength, which maps to the N state.
+ */
+function viterbiSmooth(labels: string[], strengths: number[]): number[] {
+  const T = labels.length;
+  if (T === 0) return [];
 
-  let best = -Infinity;
-  let second = -Infinity;
-  let bestLabel = 'N';
-  for (const t of CHORD_TEMPLATES) {
-    const score = dot(chroma, t.vec) / (norm * Math.sqrt(3));
-    if (score > best) {
-      second = best;
-      best = score;
-      bestLabel = t.label;
-    } else if (score > second) {
-      second = score;
+  const logStay = Math.log(STAY_PROB);
+  const logSwitch = Math.log((1 - STAY_PROB) / (NUM_STATES - 1));
+
+  const emit: number[][] = new Array(T);
+  for (let t = 0; t < T; t++) emit[t] = buildEmission(labels[t], strengths[t]);
+
+  const dp: number[][] = new Array(T);
+  const back: number[][] = new Array(T);
+  dp[0] = emit[0].slice(); // uniform prior over states
+  for (let t = 1; t < T; t++) {
+    dp[t] = new Array(NUM_STATES);
+    back[t] = new Array(NUM_STATES);
+    for (let s = 0; s < NUM_STATES; s++) {
+      let bestPrev = 0;
+      let bestScore = -Infinity;
+      for (let p = 0; p < NUM_STATES; p++) {
+        const score = dp[t - 1][p] + (p === s ? logStay : logSwitch);
+        if (score > bestScore) {
+          bestScore = score;
+          bestPrev = p;
+        }
+      }
+      dp[t][s] = bestScore + emit[t][s];
+      back[t][s] = bestPrev;
     }
   }
-  // Confidence: how much the winner stands out from the runner-up.
-  const confidence = clamp01(best - Math.max(0, second));
-  if (best < 0.5) return { label: 'N', confidence: 0 };
-  return { label: bestLabel, confidence };
+
+  let last = 0;
+  let bestEnd = -Infinity;
+  for (let s = 0; s < NUM_STATES; s++) {
+    if (dp[T - 1][s] > bestEnd) {
+      bestEnd = dp[T - 1][s];
+      last = s;
+    }
+  }
+  const path = new Array<number>(T);
+  path[T - 1] = last;
+  for (let t = T - 1; t > 0; t--) path[t - 1] = back[t][path[t]];
+  return path;
+}
+
+/** Per-segment emission log-probabilities over the 25-state chord space. */
+function buildEmission(label: string, strength: number): number[] {
+  const e = new Array<number>(NUM_STATES).fill(LOG_EPS);
+  const idx = LABEL_TO_INDEX.get(label);
+  if (strength <= 0 || idx === undefined) {
+    e[NO_CHORD_INDEX] = 0; // log(1): no confident chord here
+    return e;
+  }
+  const s = clamp01(strength);
+  // Leftover mass after the detected triad, split between "no chord" and the
+  // other 23 triads so Viterbi retains a path through them.
+  const rest = ((1 - s) * (1 - NO_CHORD_PRIOR)) / (NUM_STATES - 2);
+  for (let i = 0; i < NUM_STATES; i++) {
+    if (i === idx) e[i] = Math.log(Math.max(s, 1e-6));
+    else if (i === NO_CHORD_INDEX) e[i] = Math.log(Math.max((1 - s) * NO_CHORD_PRIOR, 1e-6));
+    else e[i] = Math.log(Math.max(rest, 1e-6));
+  }
+  return e;
 }
 
 /** Merge consecutive equal-label spans into single chord blocks. */
@@ -234,14 +316,6 @@ function safeDelete(v: any) {
   } catch {
     /* ignore double-free */
   }
-}
-function dot(a: number[], b: number[]): number {
-  let s = 0;
-  for (let i = 0; i < a.length; i++) s += a[i] * b[i];
-  return s;
-}
-function l2norm(a: number[]): number {
-  return Math.sqrt(dot(a, a));
 }
 function round1(n: number): number {
   return Math.round(n * 10) / 10;

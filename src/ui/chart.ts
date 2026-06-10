@@ -52,6 +52,20 @@ export class Chart {
     this.redraw();
   }
 
+  /** Drop all rendered data so the next file starts from a clean slate. */
+  clear() {
+    this.decoded = null;
+    this.analysis = null;
+    this.pxPerSec = 0; // force fit-to-container for the next track
+    this.playhead = 0;
+    this.ctx.setTransform(1, 0, 0, 1, 0, 0);
+    this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+    this.canvas.width = 0;
+    this.canvas.height = 0;
+    this.scrollEl.scrollLeft = 0;
+    this.updatePlayhead();
+  }
+
   setAnalysis(analysis: AnalysisResult) {
     this.analysis = analysis;
     this.redraw();

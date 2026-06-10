@@ -60,6 +60,8 @@ export interface WorkerAnalysis {
   /** Per-frame 12-bin chroma + frame times, used for section detection. */
   chroma: number[][];
   chromaTimes: number[];
+  /** Per-beat downbeat salience (aligned with `beats`); drives auto-phase. */
+  downbeatStrength: number[];
 }
 
 /** Fully assembled analysis used by the UI. */

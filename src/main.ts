@@ -9,6 +9,7 @@ import type {
 } from './types';
 import { decodeAudioFile } from './audio/decode';
 import { buildBars, detectSections } from './analysis/structure';
+import { estimateDownbeatOffset } from './analysis/downbeat';
 import { crossCheckBpm, isOctaveRelated } from './analysis/bpmCrossCheck';
 import { setupDropzone } from './ui/dropzone';
 import { Player } from './ui/player';
@@ -70,11 +71,18 @@ const controls = new Controls(controlsEl, {
   setBeatsPerBar: (n) => {
     if (!state) return;
     state.beatsPerBar = n;
+    // Phase meaning changes with the meter, so re-run the auto estimate.
+    state.downbeatOffset = autoDownbeatOffset(state.raw, n);
     rebuild();
   },
   nudgeDownbeat: (d) => {
     if (!state) return;
     state.downbeatOffset += d;
+    rebuild();
+  },
+  autoDownbeat: () => {
+    if (!state) return;
+    state.downbeatOffset = autoDownbeatOffset(state.raw, state.beatsPerBar);
     rebuild();
   },
   exportPng: () => state && exportPng(chart.element, `${baseName(state.fileName)}-chart.png`),
@@ -118,7 +126,7 @@ async function handleFile(file: File) {
       crossCheckBpm: crossBpm,
       tempoFactor: 1,
       beatsPerBar: 4,
-      downbeatOffset: 0,
+      downbeatOffset: autoDownbeatOffset(raw, 4),
       keyOverride: null,
     };
 
@@ -189,6 +197,11 @@ function buildResult(s: State): AnalysisResult {
     downbeatOffset: s.downbeatOffset,
     duration: s.decoded.duration,
   };
+}
+
+/** Auto-pick the bar phase from the worker's per-beat downbeat salience. */
+function autoDownbeatOffset(raw: WorkerAnalysis, beatsPerBar: number): number {
+  return estimateDownbeatOffset(raw.beats, raw.downbeatStrength, beatsPerBar);
 }
 
 function rebuild() {

@@ -6,6 +6,7 @@ export interface ControlHandlers {
   setKey(key: string, scale: 'major' | 'minor'): void;
   setBeatsPerBar(n: number): void;
   nudgeDownbeat(delta: number): void;
+  autoDownbeat(): void;
   exportPng(): void;
   exportJson(): void;
 }
@@ -41,6 +42,7 @@ export class Controls {
     );
 
     const dbBack = this.button('◀', () => this.h.nudgeDownbeat(-1), 'small');
+    const dbAuto = this.button('Auto', () => this.h.autoDownbeat(), 'small');
     const dbFwd = this.button('▶', () => this.h.nudgeDownbeat(1), 'small');
 
     const pngBtn = this.button('⬇ PNG', () => this.h.exportPng());
@@ -52,7 +54,7 @@ export class Controls {
       this.group('Tempo', [halve, dbl]),
       this.group('Key', [keySel, scaleSel]),
       this.group('Meter', [meterSel]),
-      this.group('Downbeat', [dbBack, dbFwd]),
+      this.group('Downbeat', [dbBack, dbAuto, dbFwd]),
       this.group('Export', [pngBtn, jsonBtn]),
     );
   }

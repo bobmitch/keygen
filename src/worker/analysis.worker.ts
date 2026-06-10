@@ -7,9 +7,13 @@ import type {
   WorkerAnalysis,
   WorkerMessage,
 } from '../types';
+import { beatDownbeatStrength } from '../analysis/downbeat';
 
 const FRAME_SIZE = 4096;
 const HOP_SIZE = 2048;
+
+// Upper edge of the "kick/bass" band used for the downbeat low-energy cue.
+const LOW_BAND_HZ = 150;
 
 // HPCP size-12 bins start at the reference pitch class (A = 440 Hz default).
 const NOTE_NAMES = ['A', 'A#', 'B', 'C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#'];
@@ -68,9 +72,17 @@ async function analyze(samples: Float32Array, sampleRate: number): Promise<Worke
   };
   safeDelete(signalVector);
 
-  // --- Per-frame chroma (HPCP) ---
+  // --- Per-frame chroma (HPCP) + onset/low-band features for downbeat scoring ---
   post({ type: 'progress', stage: 'Computing chroma features' });
-  const { chroma, chromaTimes } = computeChroma(es, samples, sampleRate);
+  const { chroma, chromaTimes, flux, lowEnergy } = computeChroma(es, samples, sampleRate);
+
+  // --- Per-beat downbeat salience (onset + bass + harmonic change) ---
+  const downbeatStrength = beatDownbeatStrength(beats, {
+    frameTimes: chromaTimes,
+    flux,
+    lowEnergy,
+    chroma,
+  });
 
   // --- Chords (template-matched beat-synchronous chroma + Viterbi smoothing) ---
   post({ type: 'progress', stage: 'Estimating chords' });
@@ -84,6 +96,7 @@ async function analyze(samples: Float32Array, sampleRate: number): Promise<Worke
     chords,
     chroma,
     chromaTimes,
+    downbeatStrength,
   };
 }
 
@@ -91,11 +104,33 @@ function computeChroma(es: any, samples: Float32Array, sampleRate: number) {
   const frames = es.FrameGenerator(samples, FRAME_SIZE, HOP_SIZE);
   const chroma: number[][] = [];
   const chromaTimes: number[] = [];
+  // Onset / bass cues for downbeat scoring, derived from the same magnitude
+  // spectrum we already compute for chroma (no extra FFTs).
+  const flux: number[] = [];
+  const lowEnergy: number[] = [];
+  const lowBin = Math.max(1, Math.round((LOW_BAND_HZ * FRAME_SIZE) / sampleRate));
+  let prevSpec: Float32Array | null = null;
   const count = frames.size();
   for (let i = 0; i < count; i++) {
     const frame = frames.get(i);
     const win = es.Windowing(frame, true, FRAME_SIZE, 'hann');
     const spec = es.Spectrum(win.frame, FRAME_SIZE);
+    const specArr = es.vectorToArray(spec.spectrum) as Float32Array;
+    // Low-band (kick/bass) energy: sum of magnitude^2 below LOW_BAND_HZ (skip DC).
+    let lowSum = 0;
+    for (let b = 1; b <= lowBin && b < specArr.length; b++) lowSum += specArr[b] * specArr[b];
+    lowEnergy.push(lowSum);
+    // Half-wave-rectified spectral flux vs the previous frame (onset novelty).
+    let fluxSum = 0;
+    if (prevSpec) {
+      const len = Math.min(specArr.length, prevSpec.length);
+      for (let b = 0; b < len; b++) {
+        const d = specArr[b] - prevSpec[b];
+        if (d > 0) fluxSum += d;
+      }
+    }
+    flux.push(fluxSum);
+    prevSpec = specArr;
     const peaks = es.SpectralPeaks(spec.spectrum, -1000, 5000, 100, 40, 'magnitude', sampleRate);
     // NB: maxShifted MUST stay false. When true, HPCP rotates every frame so its
     // peak lands on bin 0, which destroys the absolute pitch-class mapping the
@@ -119,7 +154,7 @@ function computeChroma(es: any, samples: Float32Array, sampleRate: number) {
     }
   }
   safeDelete(frames);
-  return { chroma, chromaTimes };
+  return { chroma, chromaTimes, flux, lowEnergy };
 }
 
 // --- Chord state space -------------------------------------------------------

@@ -18,6 +18,18 @@ export class Player {
     this.audio.src = this.url;
   }
 
+  /** Stop playback and release the current audio buffer/URL. */
+  stop() {
+    this.audio.pause();
+    this.stopLoop();
+    if (this.url) {
+      URL.revokeObjectURL(this.url);
+      this.url = null;
+    }
+    this.audio.removeAttribute('src');
+    this.audio.load();
+  }
+
   onUpdate(cb: (time: number, playing: boolean) => void) {
     this.onTick = cb;
   }

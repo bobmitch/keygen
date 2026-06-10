@@ -251,6 +251,10 @@ function showFileBar(name: string) {
   btn.className = 'btn small';
   btn.textContent = 'Analyze another';
   btn.addEventListener('click', () => {
+    player.stop();
+    chart.clear();
+    state = null;
+    fileInput.value = '';
     resultsEl.classList.add('hidden');
     fileBar.classList.add('hidden');
     dropzone.classList.remove('hidden');

@@ -1,9 +1,9 @@
 import { defineConfig } from 'vite';
 
-// Project is deployed to GitHub Pages at https://<user>.github.io/keygen/
-// so assets must resolve under the /keygen/ subpath in production.
+// Relative base so the built site works from any path — the domain root, a
+// subfolder on your own web server, or the /keygen/ subpath on GitHub Pages.
 export default defineConfig({
-  base: process.env.NODE_ENV === 'production' ? '/keygen/' : '/',
+  base: './',
   worker: {
     format: 'es',
   },

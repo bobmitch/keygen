@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>keygen — audio key, BPM &amp; chord chart</title>
+    <script type="module" crossorigin src="./assets/index-Bud_3eUM.js"></script>
+    <link rel="stylesheet" crossorigin href="./assets/index-ODThFaX0.css">
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">
+        <span class="logo">▚</span>
+        <h1>keygen</h1>
+        <span class="tagline">key · bpm · chords · structure — analyzed in your browser</span>
+      </div>
+      <div class="file-bar hidden" id="fileBar"></div>
+    </header>
+
+    <main>
+      <section class="dropzone" id="dropzone">
+        <div class="dropzone-inner">
+          <div class="drop-icon">♪</div>
+          <p class="drop-title">Drop an audio file here</p>
+          <p class="drop-sub">or</p>
+          <button class="btn primary" id="chooseBtn" type="button">Choose file</button>
+          <input type="file" id="fileInput" accept="audio/*" hidden />
+          <p class="drop-note">Nothing is uploaded — analysis runs entirely on your device.</p>
+        </div>
+      </section>
+
+      <section class="progress hidden" id="progress">
+        <div class="spinner"></div>
+        <p class="progress-stage" id="progressStage">Working…</p>
+        <div class="progress-bar"><div class="progress-fill" id="progressFill"></div></div>
+      </section>
+
+      <section class="error hidden" id="error"></section>
+
+      <section class="results hidden" id="results">
+        <div class="summary" id="summary"></div>
+        <div class="controls" id="controls"></div>
+
+        <div class="stage-scroll" id="stageScroll">
+          <div class="stage" id="stage">
+            <canvas class="lanes" id="lanes"></canvas>
+            <div class="playhead" id="playhead"></div>
+          </div>
+        </div>
+        <p class="hint" id="stageHint">
+          Tip: click the waveform to seek. Use the <strong>Downbeat</strong> controls to line up bar 1,
+          and <strong>Halve/Double</strong> if the tempo locked onto the wrong octave.
+        </p>
+        <audio id="player" hidden></audio>
+
+        <div class="leadsheet-wrap">
+          <div class="view-toggle">
+            <button class="btn" id="leadsheetToggle" type="button">Show lead-sheet grid</button>
+          </div>
+          <div class="leadsheet hidden" id="leadsheet"></div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="appfoot">
+      <span>Estimates are approximate — use the controls to correct tempo, key, and the downbeat.</span>
+    </footer>
+
+  </body>
+</html>

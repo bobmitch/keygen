@@ -2,16 +2,18 @@
 
 A single-page, **100% client-side** tool that analyzes an audio file in your browser and
 charts its **key/mode, tempo (BPM), chords, bars, and sections** against the waveform.
-Nothing is uploaded — the file is decoded and analyzed entirely on your device.
+Nothing is uploaded — the file is decoded and analyzed entirely on your device. The whole
+analysis stack is **zero-dependency TypeScript** (`src/dsp/`): no WASM blobs, no external
+DSP engine.
 
 ## Features
 
 - **Drag & drop or file picker** to load any browser-decodable audio file (MP3, WAV, FLAC, M4A…).
-- **Key + mode** detection (Essentia `KeyExtractor`).
-- **Tempo + beat grid** (Essentia `RhythmExtractor2013`) with a `realtime-bpm-analyzer`
-  cross-check and ½× / 2× correction for octave errors.
-- **Chord chart** — beat-synchronous major/minor triad estimation (Essentia `ChordsDetectionBeats`
-  on HPCP chroma) with **Viterbi smoothing** to suppress isolated, low-confidence flips.
+- **Key + mode** detection (Krumhansl-Schmuckler profile correlation over spectral-peak chroma).
+- **Tempo + beat grid** (autocorrelation tempo + Ellis dynamic-programming beat tracking) with
+  a built-in half/double-time cross-check and ½× / 2× correction for octave errors.
+- **Chord chart** — beat-synchronous major/minor triad estimation (template matching on
+  HPCP-style chroma) with **Viterbi smoothing** to suppress isolated, low-confidence flips.
 - **Bars & sections** — beats grouped into bars (adjustable meter + downbeat), and structural
   sections from a chroma self-similarity / novelty curve.
 - **Waveform + aligned chart lanes** rendered on one canvas (pixel-perfect alignment), plus
@@ -41,10 +43,11 @@ npm install
 npm run dev        # start the dev server (open the printed URL)
 npm run build      # type-check + production build into dist/
 npm run preview    # preview the production build
+npm run test       # run the DSP unit tests (vitest)
 npm run typecheck  # type-check only
 ```
 
-> The app uses ES modules, a Web Worker, and WebAssembly, so it must be served over HTTP —
+> The app uses ES modules and a Web Worker, so it must be served over HTTP —
 > opening `index.html` from `file://` will not work. `npm run dev` / `npm run preview` handle this.
 
 ## Deploy (GitHub Pages)
@@ -56,12 +59,11 @@ The Vite `base` is set to `/keygen/` for production so assets resolve under the 
 ## How it works
 
 1. The file is decoded with the Web Audio API and downmixed to mono at 44.1 kHz (`src/audio/decode.ts`).
-2. Heavy analysis runs in a **Web Worker** (`src/worker/analysis.worker.ts`) using Essentia.js
-   (WASM): tempo + beats, key, per-frame chroma, and beat-synchronous chord detection
-   (`ChordsDetectionBeats`) followed by a Viterbi smoothing pass.
+2. Heavy analysis runs in a **Web Worker** (`src/worker/analysis.worker.ts`) on the in-house
+   DSP core (`src/dsp/`): a fine-grained onset envelope drives autocorrelation tempo
+   estimation and dynamic-programming beat tracking; a coarse STFT pass yields spectral-peak
+   chroma for key detection, downbeat scoring, and beat-synchronous chord detection with a
+   Viterbi smoothing pass. Every estimator is a pure function with unit tests against
+   synthetic signals of known tempo/key.
 3. The main thread groups beats into bars and detects sections (`src/analysis/structure.ts`),
    then renders the waveform and aligned chart lanes on a single canvas (`src/ui/chart.ts`).
-
-## License
-
-Uses [Essentia.js](https://github.com/MTG/essentia.js) (AGPL-3.0).

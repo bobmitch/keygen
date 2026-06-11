@@ -21,9 +21,9 @@ export interface BpmResult {
   confidence: number;
   /** Beat onset times in seconds. */
   beats: number[];
-  /** Cross-check estimate from realtime-bpm-analyzer, if available. */
+  /** Competitive half/double-time candidate from the tempo estimator, if any. */
   crossCheckBpm?: number;
-  /** True when the cross-check disagrees by ~2x / 0.5x (octave ambiguity). */
+  /** True when that alternative disagrees by ~2x / 0.5x (octave ambiguity). */
   octaveAmbiguous?: boolean;
 }
 
@@ -55,6 +55,8 @@ export interface WorkerAnalysis {
   key: KeyResult;
   bpm: number;
   bpmConfidence: number;
+  /** Competitive half/double-time tempo candidate, if the estimator saw one. */
+  altBpm?: number;
   beats: number[];
   /** Raw per-beat chord estimate (one span per inter-beat segment, unmerged). */
   beatChords: ChordSpan[];

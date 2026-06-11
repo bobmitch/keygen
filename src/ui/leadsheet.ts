@@ -140,8 +140,9 @@ function resetBar(cell: HTMLElement) {
 /**
  * Break a bar into beat-proportional chord segments, splitting only where the
  * detector is confident. Low-confidence beats (and mid-bar "no-chord") inherit the
- * running chord, so uncertain bars collapse to a single dominant chord (the prior
- * behaviour) and only sure mid-bar changes become visible splits.
+ * running chord, carried strictly *forward* from the chord already sounding, so an
+ * uncertain beat shows the chord that preceded it — never one that only arrives
+ * later in the bar. Only sure changes become visible splits.
  */
 function barSegments(chords: ChordSpan[], bar: Bar): Seg[] {
   const beats = bar.beats;
@@ -150,9 +151,10 @@ function barSegments(chords: ChordSpan[], bar: Bar): Seg[] {
     return [{ label, beats: 1, conf, start: bar.start, end: bar.end }];
   }
 
-  // Resolve each beat to a chord; carry the running chord forward across any beat
-  // that is low-confidence or no-chord, so only confident beats can start a change.
-  let running = dominantLabel(chords, bar);
+  // Seed the running chord with the one carried *into* the bar (sounding at the
+  // downbeat), so a low-confidence first beat reads as the held chord rather than
+  // borrowing a later chord backward. Confident beats then start changes in place.
+  let running = chordAt(chords, bar.start);
   const per: Seg[] = [];
   for (let i = 0; i < beats.length; i++) {
     const s = beats[i];
@@ -190,23 +192,12 @@ function beatChord(chords: ChordSpan[], s: number, e: number): { label: string; 
   return { label, conf };
 }
 
-/** Chord covering the most time within the bar (excluding no-chord), or 'N'. */
-function dominantLabel(chords: ChordSpan[], bar: Bar): string {
-  const totals = new Map<string, number>();
+/** Label of the chord span sounding at instant `t` (the chord carried into the bar). */
+function chordAt(chords: ChordSpan[], t: number): string {
   for (const c of chords) {
-    if (c.label === 'N') continue;
-    const overlap = Math.min(bar.end, c.end) - Math.max(bar.start, c.start);
-    if (overlap > 0) totals.set(c.label, (totals.get(c.label) ?? 0) + overlap);
+    if (c.start <= t && t < c.end) return c.label;
   }
-  let best = 'N';
-  let bestVal = 0;
-  for (const [label, val] of totals) {
-    if (val > bestVal) {
-      bestVal = val;
-      best = label;
-    }
-  }
-  return best;
+  return 'N';
 }
 
 function clamp01(x: number): number {

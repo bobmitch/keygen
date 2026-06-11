@@ -52,16 +52,28 @@ for (let root = 0; root < 12; root++) {
 
 // --- Scoring hyper-parameters (all in cosine-similarity units, 0..1) ---------
 // Viterbi maximises the sum, over segments, of (emission + self/key/triad bias).
+//
+// The self-reward suppresses single-beat flicker. We keep it *fixed* (no
+// novelty-based relaxation): a relaxed reward made the decoder flip to the next
+// chord as soon as its notes started bleeding into the prior beat, pulling changes
+// a beat early. The "land changes on the right beat" job is instead done at the
+// source, by trimming each beat's ring-out lead-in (see LEAD_TRIM_* below), so the
+// downbeat's chroma already reflects the chord actually sounding — no backward-
+// reaching correction is needed here, and none is applied.
 const SELF_BONUS = 0.15; // reward for keeping the same chord; suppresses flicker
-// How much a strong harmonic change relaxes SELF_BONUS (0..1). The self-reward is
-// what suppresses flicker, but at a real chord change it also delays the switch by
-// up to one beat (the old chord "leaks" into the next bar). Shrinking the reward in
-// proportion to inter-segment chroma novelty lets genuine changes land on time
-// while keeping full stickiness on stable/noisy segments.
-const SELF_RELAX = 0.7;
 const KEY_BONUS = 0.08; // reward for chords diatonic to the detected key
 const TRIAD_BIAS = 0.05; // penalty on 7th chords so they only win when supported
 const NO_CHORD_SIM = 0.5; // similarity floor a chord must clear to beat "no chord"
+
+// Lead-in trim. At a chord change the first frames of the new beat still carry the
+// *previous* chord's decaying tail (reverb / instrument ring-out), which biases
+// that beat toward the old chord and delays the switch by a beat. Dropping a
+// small, tempo-scaled slice from the *start* of each beat lets the chroma reflect
+// the chord sounding through the bulk of the beat. This only ever looks forward
+// within the same beat, so it can never pull a chord earlier than its own beat.
+const LEAD_TRIM_FRAC = 0.18; // fraction of the beat dropped from its start
+const LEAD_TRIM_MIN = 0.03; // ... floored (s) so fast tempos still de-tail
+const LEAD_TRIM_MAX = 0.09; // ... capped (s) so slow tempos don't over-trim
 
 /**
  * Decode one chord per inter-beat segment (the raw, *unmerged* per-beat estimate),
@@ -114,9 +126,12 @@ export function estimateBeatChords(
 }
 
 /**
- * Median-aggregate the per-frame chroma whose centre falls in [start, end), then
- * L2-normalise. Median is robust to transients/percussive frames. Frames arrive
- * in time order, so we advance a shared cursor instead of rescanning each time.
+ * Median-aggregate the per-frame chroma whose centre falls in [start+trim, end),
+ * then L2-normalise. The leading `trim` slice is dropped to shed the previous
+ * chord's ring-out tail (see LEAD_TRIM_*). Median is robust to transients. Frames
+ * arrive in time order, so we advance a shared cursor instead of rescanning. The
+ * cursor still resumes from this beat's `end`, so trimmed frames are simply dropped
+ * (they belong to neither beat), never reassigned to a neighbour.
  */
 function segmentChroma(
   chroma: number[][],
@@ -125,8 +140,13 @@ function segmentChroma(
   end: number,
   cursor: { i: number },
 ): Float64Array {
+  const span = end - start;
+  const trim = span > 0 ? Math.min(LEAD_TRIM_MAX, Math.max(LEAD_TRIM_MIN, span * LEAD_TRIM_FRAC)) : 0;
+  // Only trim when it still leaves the bulk of the beat to aggregate over.
+  const aStart = trim < span * 0.6 ? start + trim : start;
+
   let i = cursor.i;
-  while (i < chromaTimes.length && chromaTimes[i] < start) i++;
+  while (i < chromaTimes.length && chromaTimes[i] < aStart) i++;
   const startIdx = i;
   while (i < chromaTimes.length && chromaTimes[i] < end) i++;
   cursor.i = i > startIdx ? i : startIdx;
@@ -134,7 +154,7 @@ function segmentChroma(
   const out = new Float64Array(12);
   if (i === startIdx) {
     // No frame centre landed inside the segment; use the nearest single frame.
-    const mid = (start + end) / 2;
+    const mid = (aStart + end) / 2;
     let near = Math.min(startIdx, chromaTimes.length - 1);
     if (near < 0) return out;
     if (near + 1 < chromaTimes.length &&
@@ -183,14 +203,13 @@ function viterbiSmooth(segChroma: Float64Array[], prior: Float64Array): number[]
   const dp: Float64Array[] = new Array(T);
   const back: Int32Array[] = new Array(T);
   dp[0] = emit[0].slice();
+  // Fixed stay-reward: clean change placement is handled at the chroma level, so we
+  // don't relax stickiness on novel beats (which used to switch chords a beat early).
+  const selfBonus = SELF_BONUS;
   for (let t = 1; t < T; t++) {
     const cur = new Float64Array(NUM_STATES);
     const bk = new Int32Array(NUM_STATES);
     const prev = dp[t - 1];
-    // Relax the stay-reward in proportion to how much this segment's chroma differs
-    // from the previous one, so a clear chord change isn't held a beat too long.
-    const novelty = clamp01(1 - cosine(segChroma[t], segChroma[t - 1]));
-    const selfBonus = SELF_BONUS * (1 - SELF_RELAX * novelty);
     // Best previous state ignoring the self bonus, computed once for all targets.
     let globalBest = 0;
     let globalBestScore = -Infinity;

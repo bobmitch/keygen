@@ -56,7 +56,8 @@ export interface WorkerAnalysis {
   bpm: number;
   bpmConfidence: number;
   beats: number[];
-  chords: ChordSpan[];
+  /** Raw per-beat chord estimate (one span per inter-beat segment, unmerged). */
+  beatChords: ChordSpan[];
   /** Per-frame 12-bin chroma + frame times, used for section detection. */
   chroma: number[][];
   chromaTimes: number[];

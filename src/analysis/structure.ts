@@ -29,56 +29,162 @@ export function buildBars(
   return bars;
 }
 
-/**
- * Pull chord-span boundaries that sit just past a bar line back onto it.
- *
- * Beat-synchronous chord detection and the bar grid are derived independently
- * (and, once the user retimes the bars, can drift further apart), so a change the
- * detector places a fraction of a beat late leaves the previous chord "leaking"
- * into the start of the next bar. Snapping near-boundary edges to the bar line
- * removes that leak without disturbing genuine mid-bar changes: the tolerance is a
- * fraction of the local beat interval, so it scales with tempo and never reaches a
- * whole beat. Pure + cheap — recompute whenever the bar grid changes.
- */
-export function snapChordsToBars(
-  chords: ChordSpan[],
-  bars: Bar[],
-  beats: number[],
-  tolBeats = 0.5,
-): ChordSpan[] {
-  if (chords.length < 2 || bars.length === 0) return chords;
-  const tol = estimateBeatInterval(beats) * tolBeats;
-  if (!(tol > 0)) return chords;
+// --- Bar-aware chord cleanup -------------------------------------------------
+//
+// The decoder emits one chord per beat. It frequently holds the previous bar's
+// chord for the *first beat* of a new bar (the old chord's notes ring/reverb past
+// the downbeat, and the decoder's stay-bias resists switching on a single noisy
+// beat), so e.g. a Bm->E change on a downbeat is reported a beat late and the old
+// chord "leaks" into the next bar. A boundary that late sits a whole beat past the
+// bar line, beyond any safe time-snap tolerance, so we instead fix it at the
+// per-beat level where each beat's confidence is still available.
 
-  const lines = bars.map((b) => b.start);
-  // Spans are contiguous (each end equals the next start), so a single boundary
-  // value is shared by neighbours; move both sides together.
-  const out = chords.map((c) => ({ ...c }));
-  const MIN_LEN = 1e-3;
-  for (let i = 0; i < out.length - 1; i++) {
-    const boundary = out[i].end;
-    const line = nearestLine(lines, boundary, tol);
-    if (line === null) continue;
-    // Keep both adjacent spans non-degenerate and in order after the move.
-    if (line - out[i].start < MIN_LEN || out[i + 1].end - line < MIN_LEN) continue;
-    out[i].end = line;
-    out[i + 1].start = line;
-  }
-  return out;
+/** A beat that genuinely holds the *old* chord this confidently is never de-leaked. */
+const LEAK_KEEP_CONF = 0.7;
+/** The incoming chord must clear this to be trusted with the downbeat. */
+const LEAK_MIN_SUPPORT = 0.5;
+/** Only a carry-over this short (in beats) counts as bleed rather than a real chord. */
+const MAX_LEAK_BEATS = 1;
+const EPS = 1e-6;
+
+interface BeatSeg {
+  start: number;
+  end: number;
+  label: string;
+  conf: number;
 }
 
-/** Nearest bar line to `t` within `tol`, or null when none is close enough. */
-function nearestLine(lines: number[], t: number, tol: number): number | null {
-  let best: number | null = null;
-  let bestDist = tol;
-  for (const line of lines) {
-    const d = Math.abs(line - t);
-    if (d <= bestDist) {
-      bestDist = d;
-      best = line;
+/**
+ * Build display chord spans from the per-beat chord estimate, enforcing clean
+ * chord breaks at bar lines.
+ *
+ * We resolve a chord per beat of the *current* grid (robust to a retimed/scaled
+ * grid via time-overlap, not index), then at every downbeat pull a one-beat
+ * carry-over of the previous bar's chord onto the bar line whenever a different
+ * chord owns the rest of the bar — UNLESS that leading beat is confidently the old
+ * chord (the "the chord really is there for that beat" exception). Finally we
+ * merge equal-label neighbours and stretch the ends to cover the whole track.
+ *
+ * Pure + cheap: recompute on every bar-grid change so the leak vanishes live as
+ * the user lines up the downbeat / meter.
+ */
+export function buildChordSpans(
+  beatChords: ChordSpan[],
+  bars: Bar[],
+  beats: number[],
+  duration: number,
+): ChordSpan[] {
+  if (beatChords.length === 0) return [];
+
+  // Resolve one (label, confidence) per beat segment of the current grid.
+  const segs: BeatSeg[] = [];
+  if (beats.length >= 2) {
+    for (let k = 0; k < beats.length - 1; k++) {
+      const { label, conf } = resolveChord(beatChords, beats[k], beats[k + 1]);
+      segs.push({ start: beats[k], end: beats[k + 1], label, conf });
     }
   }
-  return best;
+  if (segs.length === 0) {
+    // No usable beat grid — fall back to the raw spans merged as-is.
+    return stretchEnds(mergeSpans(beatChords.map((c) => ({ ...c }))), duration);
+  }
+
+  if (bars.length > 0) deLeakDownbeats(segs, bars);
+
+  const spans = segs.map((s) => ({ start: s.start, end: s.end, label: s.label, confidence: s.conf }));
+  return stretchEnds(mergeSpans(spans), duration);
+}
+
+/**
+ * For each downbeat, drop a single-beat bleed of the previous chord onto the bar
+ * line so the new bar starts on its real chord. Mutates `segs` in place.
+ */
+function deLeakDownbeats(segs: BeatSeg[], bars: Bar[]): void {
+  let si = 0;
+  for (const bar of bars) {
+    // First segment whose start sits on this downbeat.
+    while (si < segs.length && segs[si].start < bar.start - EPS) si++;
+    const first = si;
+    if (first === 0 || first >= segs.length) continue; // need a previous bar to leak from
+    if (Math.abs(segs[first].start - bar.start) > EPS) continue; // no beat on this downbeat
+
+    // Last segment that starts within this bar.
+    let last = first;
+    while (last + 1 < segs.length && segs[last + 1].start < bar.end - EPS) last++;
+
+    const prevLabel = segs[first - 1].label;
+    if (prevLabel === 'N') continue;
+    if (segs[first].label !== prevLabel) continue; // already a clean break at the bar line
+
+    // Count how many leading beats of the bar carry the previous chord.
+    let lead = 0;
+    while (first + lead <= last && segs[first + lead].label === prevLabel) lead++;
+    const barBeats = last - first + 1;
+    if (lead >= barBeats) continue; // chord owns the whole bar -> genuine, not bleed
+    if (lead > MAX_LEAK_BEATS) continue; // carried too long to be a one-beat bleed
+
+    // The chord that takes over after the carry-over must dominate the remainder.
+    const newLabel = segs[first + lead].label;
+    if (newLabel === 'N' || newLabel === prevLabel) continue;
+    const newConf = segs[first + lead].conf;
+    if (newConf < LEAK_MIN_SUPPORT) continue; // don't replace a chord with a weak guess
+    if (countLabel(segs, first + lead, last, newLabel) <= lead) continue;
+
+    // Reassign the leaked leading beats to the incoming chord, but stop at (and
+    // keep) any beat that is confidently the old chord — that one really is there.
+    for (let i = 0; i < lead; i++) {
+      if (segs[first + i].conf >= LEAK_KEEP_CONF) break;
+      segs[first + i].label = newLabel;
+      segs[first + i].conf = newConf;
+    }
+  }
+}
+
+/** Count beats in [lo, hi] carrying `label`. */
+function countLabel(segs: BeatSeg[], lo: number, hi: number, label: string): number {
+  let n = 0;
+  for (let i = lo; i <= hi; i++) if (segs[i].label === label) n++;
+  return n;
+}
+
+/** Decoded chord covering most of [s, e) by time overlap; 'N'/0 when none. */
+function resolveChord(chords: ChordSpan[], s: number, e: number): { label: string; conf: number } {
+  let label = 'N';
+  let conf = 0;
+  let best = 0;
+  for (const c of chords) {
+    const overlap = Math.min(e, c.end) - Math.max(s, c.start);
+    if (overlap > best) {
+      best = overlap;
+      label = c.label;
+      conf = c.confidence;
+    }
+  }
+  return { label, conf };
+}
+
+/** Merge consecutive equal-label spans into single chord blocks. */
+function mergeSpans(spans: ChordSpan[]): ChordSpan[] {
+  const merged: ChordSpan[] = [];
+  for (const s of spans) {
+    const last = merged[merged.length - 1];
+    if (last && last.label === s.label) {
+      last.end = s.end;
+      last.confidence = Math.max(last.confidence, s.confidence);
+    } else {
+      merged.push({ ...s });
+    }
+  }
+  return merged;
+}
+
+/** Stretch the first/last span so the lane covers the whole track. */
+function stretchEnds(spans: ChordSpan[], duration: number): ChordSpan[] {
+  if (spans.length) {
+    spans[0].start = Math.min(spans[0].start, 0);
+    spans[spans.length - 1].end = Math.max(spans[spans.length - 1].end, duration);
+  }
+  return spans;
 }
 
 function estimateBeatInterval(beats: number[]): number {

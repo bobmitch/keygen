@@ -9,8 +9,8 @@ import type {
   WorkerMessage,
 } from './types';
 import { decodeAudioFile } from './audio/decode';
-import { buildBars, detectSections, snapChordsToBars } from './analysis/structure';
-import { estimateChords } from './analysis/chords';
+import { buildBars, detectSections, buildChordSpans } from './analysis/structure';
+import { estimateBeatChords } from './analysis/chords';
 import { estimateDownbeatOffset } from './analysis/downbeat';
 import { crossCheckBpm, isOctaveRelated } from './analysis/bpmCrossCheck';
 import { setupDropzone } from './ui/dropzone';
@@ -57,7 +57,7 @@ interface State {
   beatsPerBar: number;
   downbeatOffset: number;
   keyOverride: KeyResult | null;
-  /** Chords re-estimated against the edited beat grid, or null to use raw. */
+  /** Per-beat chords re-estimated against the edited beat grid, or null to use raw. */
   chordsOverride: ChordSpan[] | null;
   /** True when beats/key changed since chords were last estimated. */
   chordsStale: boolean;
@@ -191,10 +191,11 @@ function buildResult(s: State): AnalysisResult {
   const beats = applyTempoFactor(s.raw.beats, s.tempoFactor);
   const bars = buildBars(beats, s.beatsPerBar, s.downbeatOffset, s.decoded.duration);
   const sections = detectSections(s.raw.chroma, s.raw.chromaTimes, bars, s.decoded.duration);
-  // Re-align chord-span edges to the current bar grid so a slightly-late detected
-  // change doesn't leak the previous chord into the next bar. Prefer chords the user
-  // re-evaluated against the edited beats, falling back to the original estimate.
-  const chords = snapChordsToBars(s.chordsOverride ?? s.raw.chords, bars, beats);
+  // Build display chord spans from the per-beat estimate, enforcing clean breaks at
+  // bar lines so a slightly-late detected change doesn't leak the previous chord
+  // into the next bar. Prefer chords the user re-evaluated against the edited beats,
+  // falling back to the original estimate.
+  const chords = buildChordSpans(s.chordsOverride ?? s.raw.beatChords, bars, beats, s.decoded.duration);
   const bpmVal = Math.round(s.raw.bpm * s.tempoFactor * 10) / 10;
   const octaveAmbiguous = s.crossCheckBpm ? isOctaveRelated(bpmVal, s.crossCheckBpm) : false;
 
@@ -256,7 +257,7 @@ function reevaluateChords() {
   if (!state) return;
   const beats = applyTempoFactor(state.raw.beats, state.tempoFactor);
   const key = state.keyOverride ?? state.raw.key;
-  state.chordsOverride = estimateChords(
+  state.chordsOverride = estimateBeatChords(
     beats,
     state.raw.chroma,
     state.raw.chromaTimes,

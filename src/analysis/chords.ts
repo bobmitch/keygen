@@ -63,7 +63,15 @@ const KEY_BONUS = 0.08; // reward for chords diatonic to the detected key
 const TRIAD_BIAS = 0.05; // penalty on 7th chords so they only win when supported
 const NO_CHORD_SIM = 0.5; // similarity floor a chord must clear to beat "no chord"
 
-export function estimateChords(
+/**
+ * Decode one chord per inter-beat segment (the raw, *unmerged* per-beat estimate),
+ * each carrying its own confidence. Kept per-beat (rather than merged into spans)
+ * so downstream bar-aware cleanup can reason about the confidence of an individual
+ * beat — in particular, whether the first beat of a bar genuinely holds the
+ * previous chord or is just bleed leaking across the bar line. Span merging and
+ * track-edge coverage happen later, in `buildChordSpans`.
+ */
+export function estimateBeatChords(
   beats: number[],
   chroma: number[][],
   chromaTimes: number[],
@@ -102,15 +110,7 @@ export function estimateChords(
     const conf = state === NO_CHORD_INDEX ? 0 : clamp01(cosine(segChroma[k], TEMPLATES[state]));
     raw.push({ start, end, label, confidence: conf });
   }
-
-  const merged = mergeChords(raw);
-  // Stretch the first/last span so the lane covers the whole track (pre-roll /
-  // tail that fell outside the beat grid).
-  if (merged.length) {
-    merged[0].start = Math.min(merged[0].start, 0);
-    merged[merged.length - 1].end = Math.max(merged[merged.length - 1].end, duration);
-  }
-  return merged;
+  return raw;
 }
 
 /**
@@ -260,21 +260,6 @@ Object.assign(PC_BY_NAME, {
 function noteToPc(name: string): number {
   const pc = PC_BY_NAME[name.trim()];
   return pc === undefined ? -1 : pc;
-}
-
-/** Merge consecutive equal-label spans into single chord blocks. */
-function mergeChords(spans: ChordSpan[]): ChordSpan[] {
-  const merged: ChordSpan[] = [];
-  for (const s of spans) {
-    const last = merged[merged.length - 1];
-    if (last && last.label === s.label) {
-      last.end = s.end;
-      last.confidence = Math.max(last.confidence, s.confidence);
-    } else {
-      merged.push({ ...s });
-    }
-  }
-  return merged;
 }
 
 function clamp01(n: number): number {

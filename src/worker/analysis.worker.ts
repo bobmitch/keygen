@@ -7,7 +7,7 @@ import type {
   WorkerMessage,
 } from '../types';
 import { beatDownbeatStrength } from '../analysis/downbeat';
-import { estimateChords } from '../analysis/chords';
+import { estimateBeatChords } from '../analysis/chords';
 
 const FRAME_SIZE = 4096;
 const HOP_SIZE = 2048;
@@ -82,15 +82,17 @@ async function analyze(samples: Float32Array, sampleRate: number): Promise<Worke
   });
 
   // --- Chords (template-matched beat-synchronous chroma + Viterbi smoothing) ---
+  // Kept per-beat here; merging + bar-aware boundary cleanup happen on the main
+  // thread so they re-run live as the user retimes the bar grid.
   post({ type: 'progress', stage: 'Estimating chords' });
-  const chords = estimateChords(beats, chroma, chromaTimes, samples.length / sampleRate, key);
+  const beatChords = estimateBeatChords(beats, chroma, chromaTimes, samples.length / sampleRate, key);
 
   return {
     key,
     bpm,
     bpmConfidence,
     beats,
-    chords,
+    beatChords,
     chroma,
     chromaTimes,
     downbeatStrength,

@@ -145,15 +145,29 @@ main { padding: 24px; max-width: 1500px; margin: 0 auto; }
 .leadsheet { margin-top: 12px; }
 .ls-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
 .ls-bar {
+  position: relative; overflow: hidden;
   background: var(--bg-elev); border: 1px solid var(--border); border-radius: 8px;
-  padding: 14px 8px; text-align: center; font-family: var(--mono); font-size: 18px; min-height: 52px;
-  display: flex; align-items: center; justify-content: center;
-  transition: background 0.1s, border-color 0.1s;
+  text-align: center; font-family: var(--mono); font-size: 18px; min-height: 52px;
+  display: flex; align-items: stretch;
+  transition: border-color 0.1s;
 }
+/* Progress sweep within the pill while playing. */
+.ls-fill {
+  position: absolute; left: 0; top: 0; bottom: 0; width: 0;
+  background: rgba(94, 234, 212, 0.14); pointer-events: none;
+  transition: width 0.08s linear;
+}
+.ls-segs { position: relative; z-index: 1; display: flex; flex: 1; align-items: stretch; }
+.ls-seg {
+  flex: 1 1 0; display: flex; align-items: center; justify-content: center;
+  padding: 14px 6px; min-width: 0;
+}
+/* Beat-proportional divider for mid-bar chord changes (the "slash"). */
+.ls-bar.split .ls-seg + .ls-seg { border-left: 1px solid var(--border); }
 .ls-bar.empty { color: var(--text-dim); }
-.ls-bar.playing {
-  background: var(--accent); color: #06231f; border-color: var(--accent); font-weight: 600;
-}
+.ls-bar.playing { border-color: var(--accent); }
+/* Currently-sounding chord (single-chord bar or the active split segment). */
+.ls-bar.playing .ls-seg.on { color: var(--accent); font-weight: 600; opacity: 1; }
 
 .appfoot { text-align: center; color: var(--text-dim); font-size: 12px; padding: 24px; border-top: 1px solid var(--border); margin-top: 32px; }
 

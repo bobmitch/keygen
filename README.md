@@ -24,7 +24,9 @@ These are estimates from lightweight in-browser DSP, not transcription-grade res
 
 - **Key/mode** is reliable on tonal material (~70–85%); the major/minor call is the most error-prone.
 - **BPM** is reliable on steady tempos; octave (½× / 2×) errors are common — use the **½× / 2×** buttons.
-- **Chords** are **major/minor triads only** and approximate (no 7ths/sus/inversions).
+- **Chords** are **major/minor triads only** and approximate (no 7ths/sus/inversions). After
+  retiming the beats/key, click **Re-evaluate chords** to re-detect them on your corrected grid
+  (reuses the cached chroma, so it's near-instant — no re-decode).
 - **Bars** assume **4/4** by default; use the **Meter** and **Downbeat** controls to line up bar 1.
 - **Sections** are approximate boundaries labelled A/B/C — not named structure (verse/chorus).
 

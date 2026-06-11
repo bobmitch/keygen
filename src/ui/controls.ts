@@ -7,6 +7,7 @@ export interface ControlHandlers {
   setBeatsPerBar(n: number): void;
   nudgeDownbeat(delta: number): void;
   autoDownbeat(): void;
+  reevaluateChords(): void;
   exportPng(): void;
   exportJson(): void;
 }
@@ -15,6 +16,7 @@ const ROOTS = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
 
 export class Controls {
   private playBtn!: HTMLButtonElement;
+  private reevalBtn!: HTMLButtonElement;
 
   constructor(
     private el: HTMLElement,
@@ -45,6 +47,11 @@ export class Controls {
     const dbAuto = this.button('Auto', () => this.h.autoDownbeat(), 'small');
     const dbFwd = this.button('▶', () => this.h.nudgeDownbeat(1), 'small');
 
+    // Disabled until a timing/key tweak makes the current chord estimate stale.
+    this.reevalBtn = this.button('↻ Re-evaluate chords', () => this.h.reevaluateChords());
+    this.reevalBtn.disabled = true;
+    this.reevalBtn.title = 'Re-detect chords against the current beats (enabled after you adjust timing or key)';
+
     const pngBtn = this.button('⬇ PNG', () => this.h.exportPng());
     const jsonBtn = this.button('⬇ JSON', () => this.h.exportJson());
 
@@ -55,12 +62,18 @@ export class Controls {
       this.group('Key', [keySel, scaleSel]),
       this.group('Meter', [meterSel]),
       this.group('Downbeat', [dbBack, dbAuto, dbFwd]),
+      this.group('Chords', [this.reevalBtn]),
       this.group('Export', [pngBtn, jsonBtn]),
     );
   }
 
   setPlaying(playing: boolean) {
     if (this.playBtn) this.playBtn.textContent = playing ? '❚❚ Pause' : '▶ Play';
+  }
+
+  /** Enable the re-evaluate button only when the chord estimate is out of date. */
+  setReevaluateEnabled(enabled: boolean) {
+    if (this.reevalBtn) this.reevalBtn.disabled = !enabled;
   }
 
   private group(label: string, nodes: HTMLElement[]): HTMLElement {

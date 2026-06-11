@@ -1,7 +1,7 @@
 // Automatic downbeat (bar-phase) estimation.
 //
-// Essentia's RhythmExtractor2013 gives us beat ticks but no notion of which beat
-// is "1". Rather than guess the phase (offset 0) and rely on the user nudging it,
+// The beat tracker gives us beat ticks but no notion of which beat is "1".
+// Rather than guess the phase (offset 0) and rely on the user nudging it,
 // we score every candidate phase with musical evidence and pick the best.
 //
 // The evidence is a per-beat "downbeat salience" fusing three cues that tend to
@@ -35,7 +35,7 @@ export interface BeatFeatureFrames {
   flux: number[];
   /** Low-frequency band energy per frame. */
   lowEnergy: number[];
-  /** Per-frame 12-bin chroma (HPCP). */
+  /** Per-frame 12-bin chroma (HPCP-style). */
   chroma: number[][];
 }
 

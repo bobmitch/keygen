@@ -12,7 +12,7 @@ import { decodeAudioFile } from './audio/decode';
 import { buildBars, detectSections, buildChordSpans } from './analysis/structure';
 import { estimateBeatChords } from './analysis/chords';
 import { estimateDownbeatOffset } from './analysis/downbeat';
-import { crossCheckBpm, isOctaveRelated } from './analysis/bpmCrossCheck';
+import { isOctaveRelated } from './dsp/tempo';
 import { setupDropzone } from './ui/dropzone';
 import { Player } from './ui/player';
 import { Chart } from './ui/chart';
@@ -52,7 +52,6 @@ interface State {
   fileName: string;
   decoded: DecodedAudio;
   raw: WorkerAnalysis;
-  crossCheckBpm?: number;
   tempoFactor: number;
   beatsPerBar: number;
   downbeatOffset: number;
@@ -128,13 +127,11 @@ async function handleFile(file: File) {
 
     showProgress('Analyzing', 0.15);
     const raw = await runWorker(decoded);
-    const crossBpm = await crossCheckBpm(decoded.samples, decoded.sampleRate);
 
     state = {
       fileName: file.name,
       decoded,
       raw,
-      crossCheckBpm: crossBpm,
       tempoFactor: 1,
       beatsPerBar: 4,
       downbeatOffset: autoDownbeatOffset(raw, 4),
@@ -197,7 +194,9 @@ function buildResult(s: State): AnalysisResult {
   // user re-evaluated against the edited beats, falling back to the original.
   const chords = buildChordSpans(s.chordsOverride ?? s.raw.beatChords, beats, s.decoded.duration);
   const bpmVal = Math.round(s.raw.bpm * s.tempoFactor * 10) / 10;
-  const octaveAmbiguous = s.crossCheckBpm ? isOctaveRelated(bpmVal, s.crossCheckBpm) : false;
+  // The tempo estimator's own half/double-time candidate plays the cross-check
+  // role: if the user re-octaves the tempo to match it, the warning clears.
+  const octaveAmbiguous = s.raw.altBpm ? isOctaveRelated(bpmVal, s.raw.altBpm) : false;
 
   return {
     key: s.keyOverride ?? s.raw.key,
@@ -205,7 +204,7 @@ function buildResult(s: State): AnalysisResult {
       bpm: bpmVal,
       confidence: s.raw.bpmConfidence,
       beats,
-      crossCheckBpm: s.crossCheckBpm,
+      crossCheckBpm: s.raw.altBpm,
       octaveAmbiguous,
     },
     chords,

@@ -1,6 +1,6 @@
-// Beat-synchronous chord estimation over precomputed HPCP chroma.
+// Beat-synchronous chord estimation over precomputed HPCP-style chroma.
 //
-// Pure math (no Essentia / no FFTs): given a beat grid, per-frame chroma, and the
+// Pure math (no FFTs): given a beat grid, per-frame chroma, and the
 // detected key, it template-matches a chord per inter-beat segment and Viterbi-
 // smooths the sequence. Living outside the worker lets the main thread re-run it on
 // demand (e.g. after the user retimes the beats) without re-decoding the audio.
@@ -267,8 +267,8 @@ function cosine(a: Float64Array, b: Float64Array): number {
   return dot;
 }
 
-// Pitch-class lookup with both sharp and flat spellings (KeyExtractor may emit
-// either). Returns -1 for anything unrecognised.
+// Pitch-class lookup with both sharp and flat spellings (the key estimate or a
+// user override may use either). Returns -1 for anything unrecognised.
 const PC_BY_NAME: Record<string, number> = {};
 NOTE_NAMES.forEach((n, i) => { PC_BY_NAME[n] = i; });
 Object.assign(PC_BY_NAME, {

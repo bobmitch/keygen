@@ -1,6 +1,6 @@
 import type { DecodedAudio } from '../types';
 
-const TARGET_SAMPLE_RATE = 44100; // Essentia algorithms default to 44.1k.
+const TARGET_SAMPLE_RATE = 44100; // All analysis framing assumes this fixed rate.
 
 /**
  * Decode an audio File entirely in the browser, downmix to mono, and resample

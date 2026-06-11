@@ -200,6 +200,12 @@ for (let root = 0; root < 12; root++) {
 // --- Scoring hyper-parameters (all in cosine-similarity units, 0..1) ---------
 // Viterbi maximises the sum, over segments, of (emission + self/key/triad bias).
 const SELF_BONUS = 0.15; // reward for keeping the same chord; suppresses flicker
+// How much a strong harmonic change relaxes SELF_BONUS (0..1). The self-reward is
+// what suppresses flicker, but at a real chord change it also delays the switch by
+// up to one beat (the old chord "leaks" into the next bar). Shrinking the reward in
+// proportion to inter-segment chroma novelty lets genuine changes land on time
+// while keeping full stickiness on stable/noisy segments.
+const SELF_RELAX = 0.7;
 const KEY_BONUS = 0.08; // reward for chords diatonic to the detected key
 const TRIAD_BIAS = 0.05; // penalty on 7th chords so they only win when supported
 const NO_CHORD_SIM = 0.5; // similarity floor a chord must clear to beat "no chord"
@@ -328,6 +334,10 @@ function viterbiSmooth(segChroma: Float64Array[], prior: Float64Array): number[]
     const cur = new Float64Array(NUM_STATES);
     const bk = new Int32Array(NUM_STATES);
     const prev = dp[t - 1];
+    // Relax the stay-reward in proportion to how much this segment's chroma differs
+    // from the previous one, so a clear chord change isn't held a beat too long.
+    const novelty = clamp01(1 - cosine(segChroma[t], segChroma[t - 1]));
+    const selfBonus = SELF_BONUS * (1 - SELF_RELAX * novelty);
     // Best previous state ignoring the self bonus, computed once for all targets.
     let globalBest = 0;
     let globalBestScore = -Infinity;
@@ -335,8 +345,8 @@ function viterbiSmooth(segChroma: Float64Array[], prior: Float64Array): number[]
       if (prev[p] > globalBestScore) { globalBestScore = prev[p]; globalBest = p; }
     }
     for (let s = 0; s < NUM_STATES; s++) {
-      // Staying in s earns SELF_BONUS; switching takes the unconstrained best.
-      const stay = prev[s] + SELF_BONUS;
+      // Staying in s earns selfBonus; switching takes the unconstrained best.
+      const stay = prev[s] + selfBonus;
       if (stay >= globalBestScore) { cur[s] = stay + emit[t][s]; bk[s] = s; }
       else { cur[s] = globalBestScore + emit[t][s]; bk[s] = globalBest; }
     }

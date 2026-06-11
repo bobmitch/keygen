@@ -8,7 +8,7 @@ import type {
   WorkerMessage,
 } from './types';
 import { decodeAudioFile } from './audio/decode';
-import { buildBars, detectSections } from './analysis/structure';
+import { buildBars, detectSections, snapChordsToBars } from './analysis/structure';
 import { estimateDownbeatOffset } from './analysis/downbeat';
 import { crossCheckBpm, isOctaveRelated } from './analysis/bpmCrossCheck';
 import { setupDropzone } from './ui/dropzone';
@@ -178,6 +178,9 @@ function buildResult(s: State): AnalysisResult {
   const beats = applyTempoFactor(s.raw.beats, s.tempoFactor);
   const bars = buildBars(beats, s.beatsPerBar, s.downbeatOffset, s.decoded.duration);
   const sections = detectSections(s.raw.chroma, s.raw.chromaTimes, bars, s.decoded.duration);
+  // Re-align frozen chord-span edges to the current bar grid so a slightly-late
+  // detected change doesn't leak the previous chord into the next bar.
+  const chords = snapChordsToBars(s.raw.chords, bars, beats);
   const bpmVal = Math.round(s.raw.bpm * s.tempoFactor * 10) / 10;
   const octaveAmbiguous = s.crossCheckBpm ? isOctaveRelated(bpmVal, s.crossCheckBpm) : false;
 
@@ -190,7 +193,7 @@ function buildResult(s: State): AnalysisResult {
       crossCheckBpm: s.crossCheckBpm,
       octaveAmbiguous,
     },
-    chords: s.raw.chords,
+    chords,
     bars,
     sections,
     beatsPerBar: s.beatsPerBar,

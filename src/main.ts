@@ -2,13 +2,15 @@ import './styles.css';
 import type {
   AnalysisResult,
   AnalyzeRequest,
+  ChordSpan,
   DecodedAudio,
   KeyResult,
   WorkerAnalysis,
   WorkerMessage,
 } from './types';
 import { decodeAudioFile } from './audio/decode';
-import { buildBars, detectSections } from './analysis/structure';
+import { buildBars, detectSections, snapChordsToBars } from './analysis/structure';
+import { estimateChords } from './analysis/chords';
 import { estimateDownbeatOffset } from './analysis/downbeat';
 import { crossCheckBpm, isOctaveRelated } from './analysis/bpmCrossCheck';
 import { setupDropzone } from './ui/dropzone';
@@ -55,6 +57,10 @@ interface State {
   beatsPerBar: number;
   downbeatOffset: number;
   keyOverride: KeyResult | null;
+  /** Chords re-estimated against the edited beat grid, or null to use raw. */
+  chordsOverride: ChordSpan[] | null;
+  /** True when beats/key changed since chords were last estimated. */
+  chordsStale: boolean;
 }
 let state: State | null = null;
 
@@ -66,6 +72,7 @@ const controls = new Controls(controlsEl, {
   setKey: (key, scale) => {
     if (!state) return;
     state.keyOverride = { key, scale, strength: 1 };
+    markChordsStale();
     rebuild();
   },
   setBeatsPerBar: (n) => {
@@ -73,18 +80,22 @@ const controls = new Controls(controlsEl, {
     state.beatsPerBar = n;
     // Phase meaning changes with the meter, so re-run the auto estimate.
     state.downbeatOffset = autoDownbeatOffset(state.raw, n);
+    markChordsStale();
     rebuild();
   },
   nudgeDownbeat: (d) => {
     if (!state) return;
     state.downbeatOffset += d;
+    markChordsStale();
     rebuild();
   },
   autoDownbeat: () => {
     if (!state) return;
     state.downbeatOffset = autoDownbeatOffset(state.raw, state.beatsPerBar);
+    markChordsStale();
     rebuild();
   },
+  reevaluateChords: () => reevaluateChords(),
   exportPng: () => state && exportPng(chart.element, `${baseName(state.fileName)}-chart.png`),
   exportJson: () => {
     if (!state) return;
@@ -128,6 +139,8 @@ async function handleFile(file: File) {
       beatsPerBar: 4,
       downbeatOffset: autoDownbeatOffset(raw, 4),
       keyOverride: null,
+      chordsOverride: null,
+      chordsStale: false,
     };
 
     progressEl.classList.add('hidden');
@@ -178,6 +191,10 @@ function buildResult(s: State): AnalysisResult {
   const beats = applyTempoFactor(s.raw.beats, s.tempoFactor);
   const bars = buildBars(beats, s.beatsPerBar, s.downbeatOffset, s.decoded.duration);
   const sections = detectSections(s.raw.chroma, s.raw.chromaTimes, bars, s.decoded.duration);
+  // Re-align chord-span edges to the current bar grid so a slightly-late detected
+  // change doesn't leak the previous chord into the next bar. Prefer chords the user
+  // re-evaluated against the edited beats, falling back to the original estimate.
+  const chords = snapChordsToBars(s.chordsOverride ?? s.raw.chords, bars, beats);
   const bpmVal = Math.round(s.raw.bpm * s.tempoFactor * 10) / 10;
   const octaveAmbiguous = s.crossCheckBpm ? isOctaveRelated(bpmVal, s.crossCheckBpm) : false;
 
@@ -190,7 +207,7 @@ function buildResult(s: State): AnalysisResult {
       crossCheckBpm: s.crossCheckBpm,
       octaveAmbiguous,
     },
-    chords: s.raw.chords,
+    chords,
     bars,
     sections,
     beatsPerBar: s.beatsPerBar,
@@ -209,6 +226,7 @@ function rebuild() {
   const result = buildResult(state);
   chart.setAnalysis(result);
   renderViews(result);
+  controls.setReevaluateEnabled(state.chordsStale);
 }
 
 function renderViews(result: AnalysisResult) {
@@ -219,6 +237,33 @@ function renderViews(result: AnalysisResult) {
 function setTempoFactor(mult: number) {
   if (!state) return;
   state.tempoFactor = clampFactor(state.tempoFactor * mult);
+  markChordsStale();
+  rebuild();
+}
+
+/** Flag that the current chord estimate no longer matches the edited beats/key. */
+function markChordsStale() {
+  if (state) state.chordsStale = true;
+}
+
+/**
+ * Re-run beat-synchronous chord estimation against the *current* beat grid and key
+ * (using the chroma already computed at load time — no re-decode). This is the
+ * expensive-to-do-by-hand step the user opts into once the timing looks right, so
+ * chord boundaries are derived from their corrected beats rather than the original.
+ */
+function reevaluateChords() {
+  if (!state) return;
+  const beats = applyTempoFactor(state.raw.beats, state.tempoFactor);
+  const key = state.keyOverride ?? state.raw.key;
+  state.chordsOverride = estimateChords(
+    beats,
+    state.raw.chroma,
+    state.raw.chromaTimes,
+    state.decoded.duration,
+    key,
+  );
+  state.chordsStale = false;
   rebuild();
 }
 

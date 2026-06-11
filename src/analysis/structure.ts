@@ -1,4 +1,4 @@
-import type { Bar, Section } from '../types';
+import type { Bar, ChordSpan, Section } from '../types';
 
 /**
  * Group detected beats into bars assuming a fixed meter. `downbeatOffset` is the
@@ -27,6 +27,58 @@ export function buildBars(
     bars.push({ index: barIndex++, start, end, beats: barBeats });
   }
   return bars;
+}
+
+/**
+ * Pull chord-span boundaries that sit just past a bar line back onto it.
+ *
+ * Beat-synchronous chord detection and the bar grid are derived independently
+ * (and, once the user retimes the bars, can drift further apart), so a change the
+ * detector places a fraction of a beat late leaves the previous chord "leaking"
+ * into the start of the next bar. Snapping near-boundary edges to the bar line
+ * removes that leak without disturbing genuine mid-bar changes: the tolerance is a
+ * fraction of the local beat interval, so it scales with tempo and never reaches a
+ * whole beat. Pure + cheap — recompute whenever the bar grid changes.
+ */
+export function snapChordsToBars(
+  chords: ChordSpan[],
+  bars: Bar[],
+  beats: number[],
+  tolBeats = 0.5,
+): ChordSpan[] {
+  if (chords.length < 2 || bars.length === 0) return chords;
+  const tol = estimateBeatInterval(beats) * tolBeats;
+  if (!(tol > 0)) return chords;
+
+  const lines = bars.map((b) => b.start);
+  // Spans are contiguous (each end equals the next start), so a single boundary
+  // value is shared by neighbours; move both sides together.
+  const out = chords.map((c) => ({ ...c }));
+  const MIN_LEN = 1e-3;
+  for (let i = 0; i < out.length - 1; i++) {
+    const boundary = out[i].end;
+    const line = nearestLine(lines, boundary, tol);
+    if (line === null) continue;
+    // Keep both adjacent spans non-degenerate and in order after the move.
+    if (line - out[i].start < MIN_LEN || out[i + 1].end - line < MIN_LEN) continue;
+    out[i].end = line;
+    out[i + 1].start = line;
+  }
+  return out;
+}
+
+/** Nearest bar line to `t` within `tol`, or null when none is close enough. */
+function nearestLine(lines: number[], t: number, tol: number): number | null {
+  let best: number | null = null;
+  let bestDist = tol;
+  for (const line of lines) {
+    const d = Math.abs(line - t);
+    if (d <= bestDist) {
+      bestDist = d;
+      best = line;
+    }
+  }
+  return best;
 }
 
 function estimateBeatInterval(beats: number[]): number {

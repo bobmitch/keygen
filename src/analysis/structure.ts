@@ -29,122 +29,38 @@ export function buildBars(
   return bars;
 }
 
-// --- Bar-aware chord cleanup -------------------------------------------------
+// --- Chord spans -------------------------------------------------------------
 //
-// The decoder emits one chord per beat. It frequently holds the previous bar's
-// chord for the *first beat* of a new bar (the old chord's notes ring/reverb past
-// the downbeat, and the decoder's stay-bias resists switching on a single noisy
-// beat), so e.g. a Bm->E change on a downbeat is reported a beat late and the old
-// chord "leaks" into the next bar. A boundary that late sits a whole beat past the
-// bar line, beyond any safe time-snap tolerance, so we instead fix it at the
-// per-beat level where each beat's confidence is still available.
-
-/** A beat that genuinely holds the *old* chord this confidently is never de-leaked. */
-const LEAK_KEEP_CONF = 0.7;
-/** The incoming chord must clear this to be trusted with the downbeat. */
-const LEAK_MIN_SUPPORT = 0.5;
-/** Only a carry-over this short (in beats) counts as bleed rather than a real chord. */
-const MAX_LEAK_BEATS = 1;
-const EPS = 1e-6;
-
-interface BeatSeg {
-  start: number;
-  end: number;
-  label: string;
-  conf: number;
-}
+// One display chord per beat of the *current* grid, resolved from the per-beat
+// estimate by time-overlap (robust to a retimed/scaled grid), then equal-label
+// neighbours are merged into blocks. Strictly causal: a beat's chord is decided
+// only by the audio under that beat — nothing downstream reaches back across a
+// beat or bar line to repaint earlier beats. Change placement is handled at the
+// source (the lead-in trim in chords.ts), so no bar-line "de-leak" is needed.
 
 /**
- * Build display chord spans from the per-beat chord estimate, enforcing clean
- * chord breaks at bar lines.
+ * Build display chord spans from the per-beat chord estimate.
  *
- * We resolve a chord per beat of the *current* grid (robust to a retimed/scaled
- * grid via time-overlap, not index), then at every downbeat pull a one-beat
- * carry-over of the previous bar's chord onto the bar line whenever a different
- * chord owns the rest of the bar — UNLESS that leading beat is confidently the old
- * chord (the "the chord really is there for that beat" exception). Finally we
- * merge equal-label neighbours and stretch the ends to cover the whole track.
- *
- * Pure + cheap: recompute on every bar-grid change so the leak vanishes live as
- * the user lines up the downbeat / meter.
+ * Pure + cheap: recompute on every bar-grid change so spans track the current
+ * beat grid live as the user lines up the downbeat / meter.
  */
 export function buildChordSpans(
   beatChords: ChordSpan[],
-  bars: Bar[],
   beats: number[],
   duration: number,
 ): ChordSpan[] {
   if (beatChords.length === 0) return [];
-
-  // Resolve one (label, confidence) per beat segment of the current grid.
-  const segs: BeatSeg[] = [];
-  if (beats.length >= 2) {
-    for (let k = 0; k < beats.length - 1; k++) {
-      const { label, conf } = resolveChord(beatChords, beats[k], beats[k + 1]);
-      segs.push({ start: beats[k], end: beats[k + 1], label, conf });
-    }
-  }
-  if (segs.length === 0) {
+  if (beats.length < 2) {
     // No usable beat grid — fall back to the raw spans merged as-is.
     return stretchEnds(mergeSpans(beatChords.map((c) => ({ ...c }))), duration);
   }
 
-  if (bars.length > 0) deLeakDownbeats(segs, bars);
-
-  const spans = segs.map((s) => ({ start: s.start, end: s.end, label: s.label, confidence: s.conf }));
-  return stretchEnds(mergeSpans(spans), duration);
-}
-
-/**
- * For each downbeat, drop a single-beat bleed of the previous chord onto the bar
- * line so the new bar starts on its real chord. Mutates `segs` in place.
- */
-function deLeakDownbeats(segs: BeatSeg[], bars: Bar[]): void {
-  let si = 0;
-  for (const bar of bars) {
-    // First segment whose start sits on this downbeat.
-    while (si < segs.length && segs[si].start < bar.start - EPS) si++;
-    const first = si;
-    if (first === 0 || first >= segs.length) continue; // need a previous bar to leak from
-    if (Math.abs(segs[first].start - bar.start) > EPS) continue; // no beat on this downbeat
-
-    // Last segment that starts within this bar.
-    let last = first;
-    while (last + 1 < segs.length && segs[last + 1].start < bar.end - EPS) last++;
-
-    const prevLabel = segs[first - 1].label;
-    if (prevLabel === 'N') continue;
-    if (segs[first].label !== prevLabel) continue; // already a clean break at the bar line
-
-    // Count how many leading beats of the bar carry the previous chord.
-    let lead = 0;
-    while (first + lead <= last && segs[first + lead].label === prevLabel) lead++;
-    const barBeats = last - first + 1;
-    if (lead >= barBeats) continue; // chord owns the whole bar -> genuine, not bleed
-    if (lead > MAX_LEAK_BEATS) continue; // carried too long to be a one-beat bleed
-
-    // The chord that takes over after the carry-over must dominate the remainder.
-    const newLabel = segs[first + lead].label;
-    if (newLabel === 'N' || newLabel === prevLabel) continue;
-    const newConf = segs[first + lead].conf;
-    if (newConf < LEAK_MIN_SUPPORT) continue; // don't replace a chord with a weak guess
-    if (countLabel(segs, first + lead, last, newLabel) <= lead) continue;
-
-    // Reassign the leaked leading beats to the incoming chord, but stop at (and
-    // keep) any beat that is confidently the old chord — that one really is there.
-    for (let i = 0; i < lead; i++) {
-      if (segs[first + i].conf >= LEAK_KEEP_CONF) break;
-      segs[first + i].label = newLabel;
-      segs[first + i].conf = newConf;
-    }
+  const spans: ChordSpan[] = [];
+  for (let k = 0; k < beats.length - 1; k++) {
+    const { label, conf } = resolveChord(beatChords, beats[k], beats[k + 1]);
+    spans.push({ start: beats[k], end: beats[k + 1], label, confidence: conf });
   }
-}
-
-/** Count beats in [lo, hi] carrying `label`. */
-function countLabel(segs: BeatSeg[], lo: number, hi: number, label: string): number {
-  let n = 0;
-  for (let i = lo; i <= hi; i++) if (segs[i].label === label) n++;
-  return n;
+  return stretchEnds(mergeSpans(spans), duration);
 }
 
 /** Decoded chord covering most of [s, e) by time overlap; 'N'/0 when none. */

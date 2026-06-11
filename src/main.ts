@@ -191,11 +191,11 @@ function buildResult(s: State): AnalysisResult {
   const beats = applyTempoFactor(s.raw.beats, s.tempoFactor);
   const bars = buildBars(beats, s.beatsPerBar, s.downbeatOffset, s.decoded.duration);
   const sections = detectSections(s.raw.chroma, s.raw.chromaTimes, bars, s.decoded.duration);
-  // Build display chord spans from the per-beat estimate, enforcing clean breaks at
-  // bar lines so a slightly-late detected change doesn't leak the previous chord
-  // into the next bar. Prefer chords the user re-evaluated against the edited beats,
-  // falling back to the original estimate.
-  const chords = buildChordSpans(s.chordsOverride ?? s.raw.beatChords, bars, beats, s.decoded.duration);
+  // Build display chord spans from the per-beat estimate (one chord per beat,
+  // merged). Strictly causal — change placement is handled at the source in
+  // chords.ts, so spans are not repainted across bar lines here. Prefer chords the
+  // user re-evaluated against the edited beats, falling back to the original.
+  const chords = buildChordSpans(s.chordsOverride ?? s.raw.beatChords, beats, s.decoded.duration);
   const bpmVal = Math.round(s.raw.bpm * s.tempoFactor * 10) / 10;
   const octaveAmbiguous = s.crossCheckBpm ? isOctaveRelated(bpmVal, s.crossCheckBpm) : false;
 
